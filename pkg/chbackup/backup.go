@@ -3,6 +3,7 @@ package chbackup
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/url"
@@ -356,7 +357,7 @@ func NewBackupName() string {
 
 // CreateBackup - create new backup of all tables matched by tablePattern
 // If backupName is empty string will use default backup name
-func CreateBackup(config Config, backupName, tablePattern string) error {
+func CreateBackup(config Config, backupName, tablePattern string, skipFreeze bool, w io.Writer) error {
 	if backupName == "" {
 		backupName = NewBackupName()
 	}
@@ -371,9 +372,11 @@ func CreateBackup(config Config, backupName, tablePattern string) error {
 	if err := os.MkdirAll(backupPath, os.ModePerm); err != nil {
 		return fmt.Errorf("can't create backup with %v", err)
 	}
-	log.Printf("Create backup '%s'", backupName)
-	if err := Freeze(config, tablePattern); err != nil {
-		return err
+	fmt.Fprintf(w, "Create backup '%s'", backupName)
+	if !skipFreeze {
+	    if err := Freeze(config, tablePattern); err != nil {
+            return err
+        }
 	}
 	log.Println("Copy metadata")
 	schemaList, err := parseSchemaPattern(path.Join(dataPath, "metadata"), tablePattern)

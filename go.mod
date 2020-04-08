@@ -14,6 +14,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20191027212112-611e8accdfc9 // indirect
 	github.com/jmoiron/sqlx v1.2.0
 	github.com/jstemmer/go-junit-report v0.9.1 // indirect
+	github.com/julienschmidt/httprouter v1.3.0
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/klauspost/compress v1.9.4 // indirect
 	github.com/mattn/go-colorable v0.1.1 // indirect

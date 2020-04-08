@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"context"
 
 	"github.com/AlexAkulov/clickhouse-backup/pkg/chbackup"
 
 	"github.com/urfave/cli"
+
+	"net/http"
+	"github.com/julienschmidt/httprouter"
 )
 
 const (
@@ -20,9 +24,134 @@ var (
 	buildDate = "unknown"
 )
 
+// Error represents a handler error. It provides methods for a HTTP status
+// code and embeds the built-in error interface.
+type Error interface {
+	error
+	Status() int
+}
+
+// StatusError represents an error with an associated HTTP status code.
+type StatusError struct {
+	Code int
+	Err  error
+}
+
+// Allows StatusError to satisfy the error interface.
+func (se StatusError) Error() string {
+	return se.Err.Error()
+}
+
+// Returns our HTTP status code.
+func (se StatusError) Status() int {
+	return se.Code
+}
+
+// A (simple) example of our application-wide configuration.
+type Env struct {
+	DB   *sql.DB
+	Port string
+	Host string
+}
+
+// The Handler struct that takes a configured Env and a function matching
+// our useful signature.
+type Handler struct {
+	*Env
+	H func(e *Env, w http.ResponseWriter, r *http.Request) error
+}
+
+// ServeHTTP allows our Handler type to satisfy http.Handler.
+func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	err := h.H(h.Env, w, r)
+	if err != nil {
+		switch e := err.(type) {
+		case Error:
+			// We can retrieve the status here and write out a specific
+			// HTTP status code.
+			log.Printf("HTTP %d - %s", e.Status(), e)
+			http.Error(w, e.Error(), e.Status())
+		default:
+			// Any error types we don't specifically look out for default
+			// to serving a HTTP 500
+			http.Error(w, http.StatusText(http.StatusInternalServerError),
+				http.StatusInternalServerError)
+		}
+	}
+}
+
+func attachConfig(h httprouter.Handle, c *cli.Context) httprouter.Handle {
+  return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+  		// Take the context out from the request
+  		ctx := r.Context()
+
+  		// Get new context with key-value "params" -> "httprouter.Params"
+  		ctx = context.WithValue(ctx, "c", c)
+
+  		// Get new http.Request with the new context
+  		r = r.WithContext(ctx)
+
+        err := h(w, r, ps)
+
+        if err != nil {
+            http.Error(w, err, 400)
+        }
+  	}
+}
+
+func create(w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    c, ok := r.Context().Value("c").(*cli.Context)
+
+    if !ok {
+        log.Fatal("c is not type *cli.Context")
+    }
+
+    var backupName = ps.ByName("backupName")
+    return chbackup.CreateBackup(*getConfig(c), backupName, c.String("t"), true, w)
+}
+
+// func upload(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+//     c, ok := r.Context().Value("c").(*cli.Context)
+//
+//     if !ok {
+//         log.Fatal("c is not type *cli.Context")
+//     }
+//
+//     var backupName = ps.ByName("backupName")
+//     err := chbackup.Upload(*getConfig(c), backupName, c.String("diff-from"))
+//     if err != nil {
+//         log.Panic(err)
+//     }
+// }
+//
+// func freeze(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+//     c, ok := r.Context().Value("c").(*cli.Context)
+//
+//     if !ok {
+//         log.Fatal("c is not type *cli.Context")
+//     }
+//
+//     err := chbackup.Freeze(*getConfig(c), c.String("t"))
+//     if err != nil {
+//         log.Panic(err)
+//     }
+// }
+
+func getConfigAndRun(c *cli.Context) error {
+	router := httprouter.New()
+    router.GET("/create/:backupName", attachConfig(create, c))
+//     router.GET("/upload/:backupName", attachConfig(freeze, c))
+//     router.GET("/freeze", attachConfig(freeze, c))
+    // todo check for empty shadow dir so we can check that the last backup ran fine, and someone else is not in teh middle of making one
+
+    return http.ListenAndServe(":8123", router)
+}
+
 func main() {
-	log.SetOutput(os.Stdout)
-	cliapp := cli.NewApp()
+
+    log.SetOutput(os.Stdout)
+
+    cliapp := cli.NewApp()
 	cliapp.Name = "clickhouse-backup"
 	cliapp.Usage = "Tool for easy backup of ClickHouse with cloud support"
 	cliapp.UsageText = "clickhouse-backup <command> [-t, --tables=<db>.<table>] <backup_name>"
@@ -64,7 +193,7 @@ func main() {
 			UsageText:   "clickhouse-backup create [-t, --tables=<db>.<table>] <backup_name>",
 			Description: "Create new backup",
 			Action: func(c *cli.Context) error {
-				return chbackup.CreateBackup(*getConfig(c), c.Args().First(), c.String("t"))
+				return chbackup.CreateBackup(*getConfig(c), c.Args().First(), c.String("t"), false, os.Stdout)
 			},
 			Flags: append(cliapp.Flags,
 				cli.StringFlag{
@@ -199,6 +328,14 @@ func main() {
 			Usage: "Remove data in 'shadow' folder",
 			Action: func(c *cli.Context) error {
 				return chbackup.Clean(*getConfig(c))
+			},
+			Flags: cliapp.Flags,
+		},
+		{
+			Name:  "serve",
+			Usage: "Starts http server for handling backup commands",
+			Action: func(c *cli.Context) error {
+				return getConfigAndRun(c)
 			},
 			Flags: cliapp.Flags,
 		},

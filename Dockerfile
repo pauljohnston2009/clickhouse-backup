@@ -1,13 +1,20 @@
-#FROM scratch
+FROM golang as builder
+
+WORKDIR /build
+COPY . .
+
+RUN make build
+
 FROM alpine
 
-#RUN adduser -D -g '' clickhouse
 RUN apk update && apk add --no-cache ca-certificates tzdata && update-ca-certificates
+RUN apk update && \
+    apk upgrade && \
+    apk add bash && \
+    apk add curl
 
-COPY clickhouse-backup/clickhouse-backup /bin/clickhouse-backup
+COPY --from=builder /build/clickhouse-backup/clickhouse-backup /bin/clickhouse-backup
 RUN chmod +x /bin/clickhouse-backup
-
-#USER clickhouse
 
 ENTRYPOINT [ "/bin/clickhouse-backup" ]
 CMD [ "--help" ]
