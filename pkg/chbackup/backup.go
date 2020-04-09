@@ -3,8 +3,8 @@ package chbackup
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -145,13 +145,13 @@ func parseSchemaPattern(metadataPath string, tablePattern string) (RestoreTables
 }
 
 // PrintTables - print all tables suitable for backup
-func PrintTables(config Config) error {
+func PrintTables(config Config, w io.Writer) error {
 	ch := &ClickHouse{
 		Config: &config.ClickHouse,
 	}
 
 	if err := ch.Connect(); err != nil {
-		return fmt.Errorf("can't connect to clickouse with: %v", err)
+		return fmt.Errorf("can't connect to clickhouse with: %v", err)
 	}
 	defer ch.Close()
 
@@ -161,9 +161,9 @@ func PrintTables(config Config) error {
 	}
 	for _, table := range allTables {
 		if table.Skip {
-			fmt.Printf("%s.%s\t(ignored)\n", table.Database, table.Name)
+			fmt.Fprintf(w, "%s.%s\t(ignored)\n", table.Database, table.Name)
 		} else {
-			fmt.Printf("%s.%s\n", table.Database, table.Name)
+			fmt.Fprintf(w, "%s.%s\n", table.Database, table.Name)
 		}
 	}
 	return nil
@@ -172,7 +172,7 @@ func PrintTables(config Config) error {
 func restoreSchema(config Config, backupName string, tablePattern string) error {
 	if backupName == "" {
 		fmt.Println("Select backup for restore:")
-		PrintLocalBackups(config, "all")
+		PrintLocalBackups(config, "all", os.Stdout)
 		os.Exit(1)
 	}
 	dataPath := getDataPath(config)
@@ -213,27 +213,27 @@ func restoreSchema(config Config, backupName string, tablePattern string) error 
 	return nil
 }
 
-func printBackups(backupList []Backup, format string, printSize bool) error {
+func printBackups(backupList []Backup, format string, printSize bool, w io.Writer) error {
 	switch format {
 	case "latest", "last", "l":
 		if len(backupList) < 1 {
 			return fmt.Errorf("no backups found")
 		}
-		fmt.Println(backupList[len(backupList)-1].Name)
+		fmt.Fprintln(w, backupList[len(backupList)-1].Name)
 	case "penult", "prev", "previous", "p":
 		if len(backupList) < 2 {
 			return fmt.Errorf("no penult backup is found")
 		}
-		fmt.Println(backupList[len(backupList)-2].Name)
+		fmt.Fprintln(w, backupList[len(backupList)-2].Name)
 	case "all", "":
 		if len(backupList) == 0 {
-			fmt.Println("no backups found")
+			fmt.Fprintln(w, "no backups found")
 		}
 		for _, backup := range backupList {
 			if printSize {
-				fmt.Printf("- '%s'\t%s\t(created at %s)\n", backup.Name, FormatBytes(backup.Size), backup.Date.Format("02-01-2006 15:04:05"))
+				fmt.Fprintf(w, "- '%s'\t%s\t(created at %s)\n", backup.Name, FormatBytes(backup.Size), backup.Date.Format("02-01-2006 15:04:05"))
 			} else {
-				fmt.Printf("- '%s'\t(created at %s)\n", backup.Name, backup.Date.Format("02-01-2006 15:04:05"))
+				fmt.Fprintf(w, "- '%s'\t(created at %s)\n", backup.Name, backup.Date.Format("02-01-2006 15:04:05"))
 			}
 		}
 	default:
@@ -243,12 +243,12 @@ func printBackups(backupList []Backup, format string, printSize bool) error {
 }
 
 // PrintLocalBackups - print all backups stored locally
-func PrintLocalBackups(config Config, format string) error {
+func PrintLocalBackups(config Config, format string, w io.Writer) error {
 	backupList, err := ListLocalBackups(config)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return printBackups(backupList, format, false)
+	return printBackups(backupList, format, false, w)
 }
 
 // ListLocalBackups - return slice of all backups stored locally
@@ -288,7 +288,7 @@ func ListLocalBackups(config Config) ([]Backup, error) {
 }
 
 // PrintRemoteBackups - print all backups stored on remote storage
-func PrintRemoteBackups(config Config, format string) error {
+func PrintRemoteBackups(config Config, format string, w io.Writer) error {
 	bd, err := NewBackupDestination(config)
 	if err != nil {
 		return err
@@ -302,8 +302,34 @@ func PrintRemoteBackups(config Config, format string) error {
 	if err != nil {
 		return err
 	}
-	return printBackups(backupList, format, true)
+	return printBackups(backupList, format, true, w)
 }
+
+func IsClean(config Config, w io.Writer) error {
+    dataPath := getDataPath(config)
+    if dataPath == "" {
+        return ErrUnknownClickhouseDataPath
+    }
+
+    shadowPath := filepath.Join(dataPath, "shadow")
+	files, err := ioutil.ReadDir(shadowPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+		    fmt.Fprintf(w, "ok\n")
+			return nil
+		}
+
+		return err
+	}
+
+	if len(files) > 0 {
+		return fmt.Errorf("'%s' is not empty, execute 'clean' command first", shadowPath)
+	}
+
+	fmt.Fprintf(w, "ok\n")
+	return nil
+}
+
 
 // Freeze - freeze tables by tablePattern
 func Freeze(config Config, tablePattern string) error {
@@ -357,7 +383,7 @@ func NewBackupName() string {
 
 // CreateBackup - create new backup of all tables matched by tablePattern
 // If backupName is empty string will use default backup name
-func CreateBackup(config Config, backupName, tablePattern string, skipFreeze bool, w io.Writer) error {
+func CreateBackup(config Config, backupName, tablePattern string, skipFreeze bool) error {
 	if backupName == "" {
 		backupName = NewBackupName()
 	}
@@ -372,7 +398,7 @@ func CreateBackup(config Config, backupName, tablePattern string, skipFreeze boo
 	if err := os.MkdirAll(backupPath, os.ModePerm); err != nil {
 		return fmt.Errorf("can't create backup with %v", err)
 	}
-	fmt.Fprintf(w, "Create backup '%s'", backupName)
+	log.Println("Create backup '%s'", backupName)
 	if !skipFreeze {
 	    if err := Freeze(config, tablePattern); err != nil {
             return err
@@ -439,7 +465,7 @@ func Restore(config Config, backupName string, tablePattern string, schemaOnly b
 func RestoreData(config Config, backupName string, tablePattern string) error {
 	if backupName == "" {
 		fmt.Println("Select backup for restore:")
-		PrintLocalBackups(config, "all")
+		PrintLocalBackups(config, "all", os.Stdout)
 		os.Exit(1)
 	}
 	dataPath := getDataPath(config)
@@ -528,7 +554,7 @@ func GetLocalBackup(config Config, backupName string) error {
 func Upload(config Config, backupName string, diffFrom string) error {
 	if backupName == "" {
 		fmt.Println("Select backup for upload:")
-		PrintLocalBackups(config, "all")
+		PrintLocalBackups(config, "all", os.Stdout)
 		os.Exit(1)
 	}
 	dataPath := getDataPath(config)
@@ -568,7 +594,7 @@ func Upload(config Config, backupName string, diffFrom string) error {
 func Download(config Config, backupName string) error {
 	if backupName == "" {
 		fmt.Println("Select backup for download:")
-		PrintRemoteBackups(config, "all")
+		PrintRemoteBackups(config, "all", os.Stdout)
 		os.Exit(1)
 	}
 	dataPath := getDataPath(config)

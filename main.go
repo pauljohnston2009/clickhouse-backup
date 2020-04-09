@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"context"
+	"io"
 
 	"github.com/AlexAkulov/clickhouse-backup/pkg/chbackup"
 
@@ -24,124 +24,115 @@ var (
 	buildDate = "unknown"
 )
 
-// Error represents a handler error. It provides methods for a HTTP status
-// code and embeds the built-in error interface.
-type Error interface {
-	error
-	Status() int
-}
-
-// StatusError represents an error with an associated HTTP status code.
-type StatusError struct {
-	Code int
-	Err  error
-}
-
-// Allows StatusError to satisfy the error interface.
-func (se StatusError) Error() string {
-	return se.Err.Error()
-}
-
-// Returns our HTTP status code.
-func (se StatusError) Status() int {
-	return se.Code
-}
-
-// A (simple) example of our application-wide configuration.
-type Env struct {
-	DB   *sql.DB
-	Port string
-	Host string
-}
-
-// The Handler struct that takes a configured Env and a function matching
-// our useful signature.
-type Handler struct {
-	*Env
-	H func(e *Env, w http.ResponseWriter, r *http.Request) error
-}
-
-// ServeHTTP allows our Handler type to satisfy http.Handler.
-func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	err := h.H(h.Env, w, r)
-	if err != nil {
-		switch e := err.(type) {
-		case Error:
-			// We can retrieve the status here and write out a specific
-			// HTTP status code.
-			log.Printf("HTTP %d - %s", e.Status(), e)
-			http.Error(w, e.Error(), e.Status())
-		default:
-			// Any error types we don't specifically look out for default
-			// to serving a HTTP 500
-			http.Error(w, http.StatusText(http.StatusInternalServerError),
-				http.StatusInternalServerError)
-		}
-	}
-}
-
-func attachConfig(h httprouter.Handle, c *cli.Context) httprouter.Handle {
+func attachConfig(h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error, c *cli.Context) httprouter.Handle {
   return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-  		// Take the context out from the request
-  		ctx := r.Context()
-
-  		// Get new context with key-value "params" -> "httprouter.Params"
-  		ctx = context.WithValue(ctx, "c", c)
-
-  		// Get new http.Request with the new context
-  		r = r.WithContext(ctx)
-
-        err := h(w, r, ps)
+        err := h(c, w, r, ps)
 
         if err != nil {
-            http.Error(w, err, 400)
+            str := err.Error()
+            http.Error(w, str, 500)
+            fmt.Println(str)
         }
   	}
 }
 
-func create(w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
-    c, ok := r.Context().Value("c").(*cli.Context)
-
-    if !ok {
-        log.Fatal("c is not type *cli.Context")
-    }
-
+func create(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
     var backupName = ps.ByName("backupName")
-    return chbackup.CreateBackup(*getConfig(c), backupName, c.String("t"), true, w)
+    return chbackup.CreateBackup(*getConfig(c), backupName, c.String("t"), true)
 }
 
-// func upload(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-//     c, ok := r.Context().Value("c").(*cli.Context)
-//
-//     if !ok {
-//         log.Fatal("c is not type *cli.Context")
-//     }
-//
-//     var backupName = ps.ByName("backupName")
-//     err := chbackup.Upload(*getConfig(c), backupName, c.String("diff-from"))
-//     if err != nil {
-//         log.Panic(err)
-//     }
-// }
-//
-// func freeze(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-//     c, ok := r.Context().Value("c").(*cli.Context)
-//
-//     if !ok {
-//         log.Fatal("c is not type *cli.Context")
-//     }
-//
-//     err := chbackup.Freeze(*getConfig(c), c.String("t"))
-//     if err != nil {
-//         log.Panic(err)
-//     }
-// }
+func restore(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupName = ps.ByName("backupName")
+    return chbackup.Restore(*getConfig(c), backupName, c.String("t"), c.Bool("s"), c.Bool("d"))
+}
+
+func delete(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var serverType = ps.ByName("serverType")
+    var backupName = ps.ByName("backupName")
+    return deleteBackup(c, serverType, backupName)
+}
+
+func upload(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupName = ps.ByName("backupName")
+    return chbackup.Upload(*getConfig(c), backupName, c.String("diff-from"))
+}
+
+func freeze(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    return chbackup.Freeze(*getConfig(c), c.String("t"))
+}
+
+func tables(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    return chbackup.PrintTables(*getConfig(c), w)
+}
+
+func clean(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    return chbackup.Clean(*getConfig(c))
+}
+
+func isClean(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    return chbackup.IsClean(*getConfig(c), w)
+}
+
+func list(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var serverType = ps.ByName("serverType")
+    var format = ps.ByName("format")
+    return listBackups(c, serverType, format, w)
+}
+
+func listAll(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var serverType = ps.ByName("serverType")
+    return listBackups(c, serverType, "", w)
+}
+
+func listBackups(c *cli.Context, serverType string, format string, w io.Writer) error {
+    config := getConfig(c)
+    switch serverType {
+    case "local":
+        return chbackup.PrintLocalBackups(*config, format, w)
+    case "remote":
+        return chbackup.PrintRemoteBackups(*config, format, w)
+    case "all", "":
+        fmt.Println("Local backups:")
+        if err := chbackup.PrintLocalBackups(*config, format, w); err != nil {
+            return err
+        }
+        fmt.Println("Remote backups:")
+        if err := chbackup.PrintRemoteBackups(*config, format, w); err != nil {
+            return err
+        }
+    default:
+        fmt.Fprintf(os.Stderr, "Unknown command '%s'\n", serverType)
+        cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+    }
+    return nil
+}
+
+func deleteBackup(c *cli.Context, serverType string, backupName string) error {
+    config := getConfig(c)
+    switch serverType {
+    case "local":
+        return chbackup.RemoveBackupLocal(*config, backupName)
+    case "remote":
+        return chbackup.RemoveBackupRemote(*config, backupName)
+    default:
+        fmt.Fprintf(os.Stderr, "Unknown command '%s'\n", serverType)
+        cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+    }
+    return nil
+}
 
 func getConfigAndRun(c *cli.Context) error {
 	router := httprouter.New()
     router.GET("/create/:backupName", attachConfig(create, c))
-//     router.GET("/upload/:backupName", attachConfig(freeze, c))
-//     router.GET("/freeze", attachConfig(freeze, c))
+    router.GET("/upload/:backupName", attachConfig(upload, c))
+    router.GET("/freeze", attachConfig(freeze, c))
+    router.GET("/tables", attachConfig(tables, c))
+    router.GET("/list/:serverType/:format", attachConfig(list, c))
+    router.GET("/list/:serverType", attachConfig(listAll, c))
+    router.GET("/restore/:backupName", attachConfig(restore, c))
+    router.GET("/delete/:serverType/:backupName", attachConfig(delete, c))
+    router.GET("/clean", attachConfig(clean, c))
+    router.GET("/is-clean", attachConfig(isClean, c))
     // todo check for empty shadow dir so we can check that the last backup ran fine, and someone else is not in teh middle of making one
 
     return http.ListenAndServe(":8123", router)
@@ -183,7 +174,7 @@ func main() {
 			Usage:     "Print list of tables",
 			UsageText: "clickhouse-backup tables",
 			Action: func(c *cli.Context) error {
-				return chbackup.PrintTables(*getConfig(c))
+				return chbackup.PrintTables(*getConfig(c), os.Stdout)
 			},
 			Flags: cliapp.Flags,
 		},
@@ -193,7 +184,7 @@ func main() {
 			UsageText:   "clickhouse-backup create [-t, --tables=<db>.<table>] <backup_name>",
 			Description: "Create new backup",
 			Action: func(c *cli.Context) error {
-				return chbackup.CreateBackup(*getConfig(c), c.Args().First(), c.String("t"), false, os.Stdout)
+				return chbackup.CreateBackup(*getConfig(c), c.Args().First(), c.String("t"), false)
 			},
 			Flags: append(cliapp.Flags,
 				cli.StringFlag{
@@ -221,26 +212,7 @@ func main() {
 			Usage:     "Print list of backups",
 			UsageText: "clickhouse-backup list [all|local|remote] [latest|penult]",
 			Action: func(c *cli.Context) error {
-				config := getConfig(c)
-				switch c.Args().Get(0) {
-				case "local":
-					return chbackup.PrintLocalBackups(*config, c.Args().Get(1))
-				case "remote":
-					return chbackup.PrintRemoteBackups(*config, c.Args().Get(1))
-				case "all", "":
-					fmt.Println("Local backups:")
-					if err := chbackup.PrintLocalBackups(*config, c.Args().Get(1)); err != nil {
-						return err
-					}
-					fmt.Println("Remote backups:")
-					if err := chbackup.PrintRemoteBackups(*config, c.Args().Get(1)); err != nil {
-						return err
-					}
-				default:
-					fmt.Fprintf(os.Stderr, "Unknown command '%s'\n", c.Args().Get(0))
-					cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
-				}
-				return nil
+				return listBackups(c, c.Args().Get(0), c.Args().Get(1), os.Stdout)
 			},
 			Flags: cliapp.Flags,
 		},
@@ -282,21 +254,11 @@ func main() {
 			Usage:     "Delete specific backup",
 			UsageText: "clickhouse-backup delete <local|remote> <backup_name>",
 			Action: func(c *cli.Context) error {
-				config := getConfig(c)
 				if c.Args().Get(1) == "" {
 					fmt.Fprintln(os.Stderr, "Backup name must be defined")
 					cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
 				}
-				switch c.Args().Get(0) {
-				case "local":
-					return chbackup.RemoveBackupLocal(*config, c.Args().Get(1))
-				case "remote":
-					return chbackup.RemoveBackupRemote(*config, c.Args().Get(1))
-				default:
-					fmt.Fprintf(os.Stderr, "Unknown command '%s'\n", c.Args().Get(0))
-					cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
-				}
-				return nil
+				return deleteBackup(c, c.Args().Get(0), c.Args().Get(1))
 			},
 			Flags: cliapp.Flags,
 		},
@@ -328,6 +290,14 @@ func main() {
 			Usage: "Remove data in 'shadow' folder",
 			Action: func(c *cli.Context) error {
 				return chbackup.Clean(*getConfig(c))
+			},
+			Flags: cliapp.Flags,
+		},
+		{
+			Name:  "isclean",
+			Usage: "Checks if the shadow dir is clean",
+			Action: func(c *cli.Context) error {
+				return chbackup.IsClean(*getConfig(c), os.Stdout)
 			},
 			Flags: cliapp.Flags,
 		},
