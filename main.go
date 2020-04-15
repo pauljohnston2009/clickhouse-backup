@@ -37,24 +37,28 @@ func attachConfig(h func(c *cli.Context, w http.ResponseWriter, r *http.Request,
 }
 
 func create(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupType = ps.ByName("backupType")
     var backupName = ps.ByName("backupName")
-    return chbackup.CreateBackup(*getConfig(c), backupName, c.String("t"), true)
+    return chbackup.CreateBackup(*getConfig(c), backupType, backupName, c.String("t"), true)
 }
 
 func restore(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupType = ps.ByName("backupType")
     var backupName = ps.ByName("backupName")
-    return chbackup.Restore(*getConfig(c), backupName, c.String("t"), c.Bool("s"), c.Bool("d"))
+    return chbackup.Restore(*getConfig(c), backupType, backupName, c.String("t"), c.Bool("s"), c.Bool("d"))
 }
 
 func delete(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
     var serverType = ps.ByName("serverType")
+    var backupType = ps.ByName("backupType")
     var backupName = ps.ByName("backupName")
-    return deleteBackup(c, serverType, backupName)
+    return deleteBackup(c, serverType, backupType, backupName)
 }
 
 func upload(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupType = ps.ByName("backupType")
     var backupName = ps.ByName("backupName")
-    return chbackup.Upload(*getConfig(c), backupName, c.String("diff-from"))
+    return chbackup.Upload(*getConfig(c), backupType, backupName, c.String("diff-from"))
 }
 
 func freeze(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
@@ -74,30 +78,32 @@ func isClean(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprout
 }
 
 func list(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupType = ps.ByName("backupType")
     var serverType = ps.ByName("serverType")
     var format = ps.ByName("format")
-    return listBackups(c, serverType, format, w)
+    return listBackups(c, serverType, backupType, format, w)
 }
 
 func listAll(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupType = ps.ByName("backupType")
     var serverType = ps.ByName("serverType")
-    return listBackups(c, serverType, "", w)
+    return listBackups(c, serverType, backupType, "", w)
 }
 
-func listBackups(c *cli.Context, serverType string, format string, w io.Writer) error {
+func listBackups(c *cli.Context, serverType string, backupType string, format string, w io.Writer) error {
     config := getConfig(c)
     switch serverType {
     case "local":
-        return chbackup.PrintLocalBackups(*config, format, w)
+        return chbackup.PrintLocalBackups(*config, backupType, format, w)
     case "remote":
-        return chbackup.PrintRemoteBackups(*config, format, w)
+        return chbackup.PrintRemoteBackups(*config, backupType, format, w)
     case "all", "":
         fmt.Println("Local backups:")
-        if err := chbackup.PrintLocalBackups(*config, format, w); err != nil {
+        if err := chbackup.PrintLocalBackups(*config, backupType, format, w); err != nil {
             return err
         }
         fmt.Println("Remote backups:")
-        if err := chbackup.PrintRemoteBackups(*config, format, w); err != nil {
+        if err := chbackup.PrintRemoteBackups(*config, backupType, format, w); err != nil {
             return err
         }
     default:
@@ -107,13 +113,13 @@ func listBackups(c *cli.Context, serverType string, format string, w io.Writer) 
     return nil
 }
 
-func deleteBackup(c *cli.Context, serverType string, backupName string) error {
+func deleteBackup(c *cli.Context, serverType string, backupType string, backupName string) error {
     config := getConfig(c)
     switch serverType {
     case "local":
-        return chbackup.RemoveBackupLocal(*config, backupName)
+        return chbackup.RemoveBackupLocal(*config, backupType, backupName)
     case "remote":
-        return chbackup.RemoveBackupRemote(*config, backupName)
+        return chbackup.RemoveBackupRemote(*config,backupType, backupName)
     default:
         fmt.Fprintf(os.Stderr, "Unknown command '%s'\n", serverType)
         cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
@@ -123,14 +129,14 @@ func deleteBackup(c *cli.Context, serverType string, backupName string) error {
 
 func getConfigAndRun(c *cli.Context) error {
 	router := httprouter.New()
-    router.GET("/create/:backupName", attachConfig(create, c))
-    router.GET("/upload/:backupName", attachConfig(upload, c))
+    router.GET("/create/:backupType/:backupName", attachConfig(create, c))
+    router.GET("/upload/:backupType/:backupName", attachConfig(upload, c))
     router.GET("/freeze", attachConfig(freeze, c))
     router.GET("/tables", attachConfig(tables, c))
-    router.GET("/list/:serverType/:format", attachConfig(list, c))
-    router.GET("/list/:serverType", attachConfig(listAll, c))
-    router.GET("/restore/:backupName", attachConfig(restore, c))
-    router.GET("/delete/:serverType/:backupName", attachConfig(delete, c))
+    router.GET("/list/:serverType/:backupType/:format", attachConfig(list, c))
+    router.GET("/list/:serverType/:backupType", attachConfig(listAll, c))
+    router.GET("/restore/:backupType/:backupName", attachConfig(restore, c))
+    router.GET("/delete/:serverType/:backupType/:backupName", attachConfig(delete, c))
     router.GET("/clean", attachConfig(clean, c))
     router.GET("/is-clean", attachConfig(isClean, c))
     // todo check for empty shadow dir so we can check that the last backup ran fine, and someone else is not in teh middle of making one
@@ -181,10 +187,14 @@ func main() {
 		{
 			Name:        "create",
 			Usage:       "Create new backup",
-			UsageText:   "clickhouse-backup create [-t, --tables=<db>.<table>] <backup_name>",
+			UsageText:   "clickhouse-backup create [-t, --tables=<db>.<table>] <backup_type> <backup_name>",
 			Description: "Create new backup",
 			Action: func(c *cli.Context) error {
-				return chbackup.CreateBackup(*getConfig(c), c.Args().First(), c.String("t"), false)
+                if c.Args().Get(0) == "" {
+                        fmt.Fprintln(os.Stderr, "Backup type must be defined")
+                        cli.ShowCommandHelpAndExit(c, c.Command.Name, 0)
+                }
+				return chbackup.CreateBackup(*getConfig(c), c.Args().Get(0), c.Args().Get(1), c.String("t"), false)
 			},
 			Flags: append(cliapp.Flags,
 				cli.StringFlag{
@@ -196,9 +206,13 @@ func main() {
 		{
 			Name:      "upload",
 			Usage:     "Upload backup to remote storage",
-			UsageText: "clickhouse-backup upload [--diff-from=<backup_name>] <backup_name>",
+			UsageText: "clickhouse-backup upload [--diff-from=<backup_name>] <backup_type> <backup_name>",
 			Action: func(c *cli.Context) error {
-				return chbackup.Upload(*getConfig(c), c.Args().First(), c.String("diff-from"))
+                if c.Args().Get(0) == "" {
+                        fmt.Fprintln(os.Stderr, "Backup type must be defined")
+                        cli.ShowCommandHelpAndExit(c, c.Command.Name, 0)
+                }
+				return chbackup.Upload(*getConfig(c), c.Args().Get(0), c.Args().Get(1), c.String("diff-from"))
 			},
 			Flags: append(cliapp.Flags,
 				cli.StringFlag{
@@ -210,27 +224,43 @@ func main() {
 		{
 			Name:      "list",
 			Usage:     "Print list of backups",
-			UsageText: "clickhouse-backup list [all|local|remote] [latest|penult]",
+			UsageText: "clickhouse-backup list <all|local|remote> <backup_type> <latest|penult>",
 			Action: func(c *cli.Context) error {
-				return listBackups(c, c.Args().Get(0), c.Args().Get(1), os.Stdout)
+                if c.Args().Get(0) == "" {
+                        fmt.Fprintln(os.Stderr, "Server type must be specified")
+                        cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+                }
+
+                if c.Args().Get(1) == "" {
+                        fmt.Fprintln(os.Stderr, "Backup type must be defined")
+                        cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+                }
+				return listBackups(c, c.Args().Get(0), c.Args().Get(1), c.Args().Get(2), os.Stdout)
 			},
 			Flags: cliapp.Flags,
 		},
 		{
 			Name:      "download",
 			Usage:     "Download backup from remote storage",
-			UsageText: "clickhouse-backup download <backup_name>",
+			UsageText: "clickhouse-backup download <backup_type> <backup_name>",
 			Action: func(c *cli.Context) error {
-				return chbackup.Download(*getConfig(c), c.Args().First())
+                if c.Args().Get(0) == "" {
+                        fmt.Fprintln(os.Stderr, "Backup type must be defined")
+                        cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+                }
+				return chbackup.Download(*getConfig(c), c.Args().Get(0), c.Args().Get(1))
 			},
 			Flags: cliapp.Flags,
 		},
 		{
 			Name:      "restore",
-			Usage:     "Create schema and restore data from backup",
-			UsageText: "clickhouse-backup restore [--schema] [--data] [-t, --tables=<db>.<table>] <backup_name>",
+			UsageText: "clickhouse-backup restore [--schema] [--data] [-t, --tables=<db>.<table>] <backup_type> <backup_name>",
 			Action: func(c *cli.Context) error {
-				return chbackup.Restore(*getConfig(c), c.Args().First(), c.String("t"), c.Bool("s"), c.Bool("d"))
+                if c.Args().Get(0) == "" {
+                        fmt.Fprintln(os.Stderr, "Backup type must be defined")
+                        cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+                }
+				return chbackup.Restore(*getConfig(c), c.Args().Get(0), c.Args().Get(1), c.String("t"), c.Bool("s"), c.Bool("d"))
 			},
 			Flags: append(cliapp.Flags,
 				cli.StringFlag{
@@ -252,13 +282,23 @@ func main() {
 		{
 			Name:      "delete",
 			Usage:     "Delete specific backup",
-			UsageText: "clickhouse-backup delete <local|remote> <backup_name>",
+			UsageText: "clickhouse-backup delete <local|remote> <backup_type> <backup_name>",
 			Action: func(c *cli.Context) error {
-				if c.Args().Get(1) == "" {
+				if c.Args().Get(0) == "" {
+					fmt.Fprintln(os.Stderr, "Server type type must be defined")
+					cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+				}
+
+                if c.Args().Get(1) == "" {
+					fmt.Fprintln(os.Stderr, "Backup type must be defined")
+					cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
+				}
+
+				if c.Args().Get(2) == "" {
 					fmt.Fprintln(os.Stderr, "Backup name must be defined")
 					cli.ShowCommandHelpAndExit(c, c.Command.Name, 1)
 				}
-				return deleteBackup(c, c.Args().Get(0), c.Args().Get(1))
+				return deleteBackup(c, c.Args().Get(0), c.Args().Get(1), c.Args().Get(2))
 			},
 			Flags: cliapp.Flags,
 		},

@@ -64,6 +64,7 @@ type BackupDestination struct {
 	compressionLevel   int
 	disableProgressBar bool
 	backupsToKeep      int
+	backupType         string
 }
 
 func (bd *BackupDestination) RemoveOldBackups(keep int) error {
@@ -85,8 +86,8 @@ func (bd *BackupDestination) RemoveOldBackups(keep int) error {
 
 func (bd *BackupDestination) RemoveBackup(backupName string) error {
 	objects := []string{}
-	if err := bd.Walk(bd.path, func(f RemoteFile) {
-		if strings.HasPrefix(f.Name(), path.Join(bd.path, backupName)) {
+	if err := bd.Walk(path.Join(bd.path, bd.backupType), func(f RemoteFile) {
+		if strings.HasPrefix(f.Name(), path.Join(bd.path, bd.backupType, backupName)) {
 			objects = append(objects, f.Name())
 		}
 	}); err != nil {
@@ -114,7 +115,7 @@ func (bd *BackupDestination) BackupList() ([]Backup, error) {
 		Date     time.Time
 	}
 	files := map[string]ClickhouseBackup{}
-	path := bd.path
+	path := path.Join(bd.path, bd.backupType)
 	err := bd.Walk(path, func(o RemoteFile) {
 		if strings.HasPrefix(o.Name(), path) {
 			key := strings.TrimPrefix(o.Name(), path)
@@ -166,7 +167,7 @@ func (bd *BackupDestination) CompressedStreamDownload(remotePath string, localPa
 	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
 		return err
 	}
-	archiveName := path.Join(bd.path, fmt.Sprintf("%s.%s", remotePath, getExtension(bd.compressionFormat)))
+	archiveName := path.Join(bd.path, bd.backupType, fmt.Sprintf("%s.%s", remotePath, getExtension(bd.compressionFormat)))
 	if err := bd.Connect(); err != nil {
 		return err
 	}
@@ -255,7 +256,7 @@ func (bd *BackupDestination) CompressedStreamDownload(remotePath string, localPa
 }
 
 func (bd *BackupDestination) CompressedStreamUpload(localPath, remotePath, diffFromPath string) error {
-	archiveName := path.Join(bd.path, fmt.Sprintf("%s.%s", remotePath, getExtension(bd.compressionFormat)))
+	archiveName := path.Join(bd.path, bd.backupType, fmt.Sprintf("%s.%s", remotePath, getExtension(bd.compressionFormat)))
 
 	if _, err := bd.GetFile(archiveName); err != nil {
 		if err != ErrNotFound {
@@ -384,7 +385,7 @@ func (bd *BackupDestination) CompressedStreamUpload(localPath, remotePath, diffF
 	return nil
 }
 
-func NewBackupDestination(config Config) (*BackupDestination, error) {
+func NewBackupDestination(config Config, backupType string) (*BackupDestination, error) {
 	switch config.General.RemoteStorage {
 	case "s3":
 		s3 := &S3{Config: &config.S3}
@@ -395,6 +396,7 @@ func NewBackupDestination(config Config) (*BackupDestination, error) {
 			config.S3.CompressionLevel,
 			config.General.DisableProgressBar,
 			config.General.BackupsToKeepRemote,
+			backupType,
 		}, nil
 	case "gcs":
 		gcs := &GCS{Config: &config.GCS}
@@ -405,6 +407,7 @@ func NewBackupDestination(config Config) (*BackupDestination, error) {
 			config.GCS.CompressionLevel,
 			config.General.DisableProgressBar,
 			config.General.BackupsToKeepRemote,
+			backupType,
 		}, nil
 	case "cos":
 		cos := &COS{Config: &config.COS}
@@ -415,6 +418,7 @@ func NewBackupDestination(config Config) (*BackupDestination, error) {
 			config.COS.CompressionLevel,
 			config.General.DisableProgressBar,
 			config.General.BackupsToKeepRemote,
+			backupType,
 		}, nil
 	default:
 		return nil, fmt.Errorf("storage type '%s' not supported", config.General.RemoteStorage)
