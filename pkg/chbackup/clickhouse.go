@@ -192,12 +192,12 @@ func (ch *ClickHouse) FreezeTable(table Table) error {
 }
 
 // GetBackupTables - return list of backups of tables that can be restored
-func (ch *ClickHouse) GetBackupTables(backupType string, backupName string) (map[string]BackupTable, error) {
+func (ch *ClickHouse) GetBackupTables(backupName string) (map[string]BackupTable, error) {
 	dataPath, err := ch.GetDataPath()
 	if err != nil {
 		return nil, err
 	}
-	backupShadowPath := filepath.Join(dataPath, backupType, backupName, "shadow")
+	backupShadowPath := filepath.Join(dataPath, "backup", backupName, "shadow")
 	dbNum := 0
 	tableNum := 1
 	partNum := 2
