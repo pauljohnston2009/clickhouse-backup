@@ -28,6 +28,7 @@ func attachConfig(h func(c *cli.Context, w http.ResponseWriter, r *http.Request,
   return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
         err := h(c, w, r, ps)
 
+        fmt.Println(err)
         if err != nil {
             str := err.Error()
             http.Error(w, str, 500)
@@ -55,6 +56,12 @@ func delete(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httproute
 func upload(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
     var backupName = ps.ByName("backupName")
     return chbackup.Upload(*getConfig(c), backupName, c.String("diff-from"))
+}
+
+func uploadWithDiff(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupName = ps.ByName("backupName")
+    var diffFrom = ps.ByName("diffFrom")
+    return chbackup.Upload(*getConfig(c), backupName, diffFrom)
 }
 
 func freeze(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
@@ -123,15 +130,16 @@ func deleteBackup(c *cli.Context, serverType string, backupName string) error {
 
 func getConfigAndRun(c *cli.Context) error {
 	router := httprouter.New()
-    router.GET("/create/:backupName", attachConfig(create, c))
-    router.GET("/upload/:backupName", attachConfig(upload, c))
-    router.GET("/freeze", attachConfig(freeze, c))
+    router.POST("/create/:backupName", attachConfig(create, c))
+    router.POST("/upload/:backupName", attachConfig(upload, c))
+    router.POST("/upload/:backupName/:diffFrom", attachConfig(uploadWithDiff, c))
+    router.POST("/freeze", attachConfig(freeze, c))
     router.GET("/tables", attachConfig(tables, c))
     router.GET("/list/:serverType/:format", attachConfig(list, c))
     router.GET("/list/:serverType", attachConfig(listAll, c))
-    router.GET("/restore/:backupName", attachConfig(restore, c))
-    router.GET("/delete/:serverType/:backupName", attachConfig(delete, c))
-    router.GET("/clean", attachConfig(clean, c))
+    router.POST("/restore/:backupName", attachConfig(restore, c))
+    router.POST("/delete/:serverType/:backupName", attachConfig(delete, c))
+    router.POST("/clean", attachConfig(clean, c))
     router.GET("/is-clean", attachConfig(isClean, c))
     // todo check for empty shadow dir so we can check that the last backup ran fine, and someone else is not in teh middle of making one
 
