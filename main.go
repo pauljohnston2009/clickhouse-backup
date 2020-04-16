@@ -39,7 +39,7 @@ func attachConfig(h func(c *cli.Context, w http.ResponseWriter, r *http.Request,
 
 func create(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
     var backupName = ps.ByName("backupName")
-    return chbackup.CreateBackup(*getConfig(c), backupName, c.String("t"), true)
+    return chbackup.CreateBackup(*getConfig(c), backupName, c.String("t"), false)
 }
 
 func restore(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
@@ -56,6 +56,12 @@ func delete(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httproute
 func upload(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
     var backupName = ps.ByName("backupName")
     return chbackup.Upload(*getConfig(c), backupName, c.String("diff-from"))
+}
+
+func download(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
+    var backupName = ps.ByName("backupName")
+    fmt.Println(backupName)
+    return chbackup.Download(*getConfig(c), backupName)
 }
 
 func uploadWithDiff(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error {
@@ -132,6 +138,7 @@ func getConfigAndRun(c *cli.Context) error {
 	router := httprouter.New()
     router.POST("/create/:backupName", attachConfig(create, c))
     router.POST("/upload/:backupName", attachConfig(upload, c))
+    router.POST("/download/:backupName", attachConfig(download, c))
     router.POST("/upload/:backupName/:diffFrom", attachConfig(uploadWithDiff, c))
     router.POST("/freeze", attachConfig(freeze, c))
     router.GET("/tables", attachConfig(tables, c))
