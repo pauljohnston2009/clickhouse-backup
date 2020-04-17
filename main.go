@@ -1,6 +1,7 @@
 package main
 
 import (
+    "time"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,9 @@ import (
 
 	"net/http"
 	"github.com/julienschmidt/httprouter"
+	"github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -24,16 +28,32 @@ var (
 	buildDate = "unknown"
 )
 
-func attachConfig(h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error, c *cli.Context) httprouter.Handle {
+var (
+        httpRequestsSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+                Name: "http_request_duration_seconds",
+                Help: "Execution time of each http request",
+                Buckets: []float64{1,10,30,60,120,240,300,600,1200,2400,3600,7200,14400},
+        },
+        []string{"method", "path", "status"})
+)
+
+func attachConfig(h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error, c *cli.Context, name string, method string) httprouter.Handle {
   return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+        start := time.Now()
         err := h(c, w, r, ps)
+        t := time.Now()
+        elapsed := t.Sub(start)
 
         fmt.Println(err)
         if err != nil {
             str := err.Error()
             http.Error(w, str, 500)
             fmt.Println(str)
+            httpRequestsSeconds.With(prometheus.Labels{"status": "500", "method": method, "path": name}).Observe(elapsed.Seconds())
+            return
         }
+
+        httpRequestsSeconds.With(prometheus.Labels{"status": "200", "method": method, "path": name}).Observe(elapsed.Seconds())
   	}
 }
 
@@ -97,6 +117,12 @@ func listAll(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprout
     return listBackups(c, serverType, "", w)
 }
 
+func metrics(h http.Handler) httprouter.Handle {
+	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		h.ServeHTTP(w, r)
+	}
+}
+
 func listBackups(c *cli.Context, serverType string, format string, w io.Writer) error {
     config := getConfig(c)
     switch serverType {
@@ -134,20 +160,29 @@ func deleteBackup(c *cli.Context, serverType string, backupName string) error {
     return nil
 }
 
+func bindGet(router *httprouter.Router, c *cli.Context, name string, h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error) {
+    router.GET(name, attachConfig(h, c, name, "GET"))
+}
+
+func bindPost(router *httprouter.Router, c *cli.Context, name string, h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error) {
+    router.POST(name, attachConfig(h, c, name, "POST"))
+}
+
 func getConfigAndRun(c *cli.Context) error {
 	router := httprouter.New()
-    router.POST("/create/:backupName", attachConfig(create, c))
-    router.POST("/upload/:backupName", attachConfig(upload, c))
-    router.POST("/download/:backupName", attachConfig(download, c))
-    router.POST("/upload/:backupName/:diffFrom", attachConfig(uploadWithDiff, c))
-    router.POST("/freeze", attachConfig(freeze, c))
-    router.GET("/tables", attachConfig(tables, c))
-    router.GET("/list/:serverType/:format", attachConfig(list, c))
-    router.GET("/list/:serverType", attachConfig(listAll, c))
-    router.POST("/restore/:backupName", attachConfig(restore, c))
-    router.POST("/delete/:serverType/:backupName", attachConfig(delete, c))
-    router.POST("/clean", attachConfig(clean, c))
-    router.GET("/is-clean", attachConfig(isClean, c))
+    bindPost(router, c, "/create/:backupName", create)
+    bindPost(router, c, "/upload/:backupName", upload)
+    bindPost(router, c, "/download/:backupName", download)
+    bindPost(router, c, "/upload/:backupName/:diffFrom", uploadWithDiff)
+    bindPost(router, c, "/freeze", freeze)
+    bindGet(router, c, "/tables", tables)
+    bindGet(router, c, "/list/:serverType/:format", list)
+    bindGet(router, c, "/list/:serverType", listAll)
+    bindPost(router, c, "/restore/:backupName", restore)
+    bindPost(router, c, "/delete/:serverType/:backupName", delete)
+    bindPost(router, c, "/clean", clean)
+    bindGet(router, c, "/is-clean", isClean)
+    router.GET("/metrics", metrics(promhttp.Handler()))
     // todo check for empty shadow dir so we can check that the last backup ran fine, and someone else is not in teh middle of making one
 
     return http.ListenAndServe(":8123", router)
