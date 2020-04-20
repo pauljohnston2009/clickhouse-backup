@@ -30,7 +30,7 @@ var (
 
 var (
         httpRequestsSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
-                Name: "http_request_duration_seconds",
+                Name: "clickhouse_backup_http_request_duration_seconds",
                 Help: "Execution time of each http request",
                 Buckets: []float64{1,10,30,60,120,240,300,600,1200,2400,3600,7200,14400},
         },
@@ -185,7 +185,8 @@ func getConfigAndRun(c *cli.Context) error {
     router.GET("/metrics", metrics(promhttp.Handler()))
     // todo check for empty shadow dir so we can check that the last backup ran fine, and someone else is not in teh middle of making one
 
-    return http.ListenAndServe(":8123", router)
+    port := getConfig(c).General.ShardBackupPort
+    return http.ListenAndServe(fmt.Sprintf(":%d", port), router)
 }
 
 func main() {

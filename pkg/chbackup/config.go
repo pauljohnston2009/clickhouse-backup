@@ -25,6 +25,7 @@ type GeneralConfig struct {
 	DisableProgressBar  bool   `yaml:"disable_progress_bar" envconfig:"DISABLE_PROGRESS_BAR"`
 	BackupsToKeepLocal  int    `yaml:"backups_to_keep_local" envconfig:"BACKUPS_TO_KEEP_LOCAL"`
 	BackupsToKeepRemote int    `yaml:"backups_to_keep_remote" envconfig:"BACKUPS_TO_KEEP_REMOTE"`
+	ShardBackupPort     int    `yaml:"shard_backup_port" envconfig:"SHARD_BACKUP_PORT"`
 }
 
 // GCSConfig - GCS settings section
