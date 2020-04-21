@@ -161,10 +161,15 @@ func deleteBackup(c *cli.Context, serverType string, backupName string) error {
 }
 
 func bindGet(router *httprouter.Router, c *cli.Context, name string, h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error) {
+	// initialise the historgram to 0 count
+	httpRequestsSeconds.With(prometheus.Labels{"status": "200", "method": "GET", "path": name})
+	httpRequestsSeconds.With(prometheus.Labels{"status": "500", "method": "GET", "path": name})
     router.GET(name, attachConfig(h, c, name, "GET"))
 }
 
 func bindPost(router *httprouter.Router, c *cli.Context, name string, h func(c *cli.Context, w http.ResponseWriter, r *http.Request, ps httprouter.Params) error) {
+	httpRequestsSeconds.With(prometheus.Labels{"status": "200", "method": "POST", "path": name})
+	httpRequestsSeconds.With(prometheus.Labels{"status": "500", "method": "POST", "path": name})
     router.POST(name, attachConfig(h, c, name, "POST"))
 }
 
